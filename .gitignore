@@ -3,7 +3,17 @@ dist
 build
 .env
 .env.local
+.env.*.local
 .DS_Store
 *.log
 .vscode
 .idea
+
+# Local tool settings — contains personal access tokens
+.claude/
+.supabase/
+*.secrets
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/

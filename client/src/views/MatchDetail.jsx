@@ -233,9 +233,6 @@ function TimelineTab() {
 
 export default function MatchDetail() {
   const [tab, setTab] = useState("events");
-  return <div className="p-6" />;
-
-  /* TEMP HIDDEN — original content below
   return (
     <div className="space-y-6 p-6">
       <ScoreCard />
@@ -274,5 +271,4 @@ export default function MatchDetail() {
       {tab === "timeline" && <TimelineTab />}
     </div>
   );
-  */
 }

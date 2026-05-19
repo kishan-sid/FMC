@@ -38,9 +38,6 @@ export default function Players() {
     goalsAgainst: rows.reduce((s, p) => s + p.goalsAgainst, 0),
   }), [rows]);
 
-  return <div className="p-6" />;
-
-  /* TEMP HIDDEN — original content below
   return (
     <div className="space-y-6 p-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -146,5 +143,4 @@ export default function Players() {
       </div>
     </div>
   );
-  */
 }
