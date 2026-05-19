@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Bell, Play, LogOut, User, ChevronDown } from "lucide-react";
+import { Bell, LogOut, ChevronDown } from "lucide-react";
 
 export default function Topbar({ title, subtitle, user, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -28,25 +28,9 @@ export default function Topbar({ title, subtitle, user, onLogout }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-sm text-slate-400 w-72">
-            <Search size={16} />
-            <input
-              className="w-full bg-transparent outline-none placeholder:text-slate-500 text-slate-200"
-              placeholder="Search match, player, team…"
-            />
-            <span className="hidden lg:inline rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500">
-              ⌘ K
-            </span>
-          </div>
-
           <button className="relative rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100">
             <Bell size={16} />
             <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
-          </button>
-
-          <button className="flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400">
-            <Play size={14} fill="currentColor" />
-            Run Scrape
           </button>
 
           <div ref={ref} className="relative ml-1">
@@ -70,9 +54,6 @@ export default function Topbar({ title, subtitle, user, onLogout }) {
                   <div className="text-sm font-semibold text-slate-100">{user?.name}</div>
                   <div className="text-[11px] text-slate-400">{user?.email}</div>
                 </div>
-                <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">
-                  <User size={14} /> Profile
-                </button>
                 <button
                   onClick={onLogout}
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10"

@@ -1,11 +1,11 @@
-import { LayoutDashboard, CalendarDays, Trophy, Users, Download, Settings, CircleDot } from "lucide-react";
+import { LayoutDashboard, CalendarDays, Trophy, Users, Download, CircleDot } from "lucide-react";
 
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "exports", label: "Scrape & Export", icon: Download },
   { id: "matchdays", label: "Matchdays", icon: CalendarDays },
   { id: "match", label: "Match Detail", icon: Trophy },
   { id: "players", label: "Players", icon: Users },
-  { id: "exports", label: "Scrape & Export", icon: Download },
 ];
 
 export default function Sidebar({ view, onChange }) {
@@ -43,18 +43,6 @@ export default function Sidebar({ view, onChange }) {
         })}
       </nav>
 
-      <div className="border-t border-slate-800 p-4">
-        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-900">
-          <Settings size={18} />
-          Settings
-        </button>
-        <div className="mt-3 rounded-lg bg-gradient-to-br from-emerald-500/10 to-amber-500/10 border border-emerald-500/20 p-3">
-          <div className="text-[11px] uppercase tracking-wider text-emerald-300/80">Pro Tip</div>
-          <div className="mt-1 text-xs text-slate-300">
-            Run <code className="text-emerald-300">npm run scrape -- --md 33</code> to refresh a matchday.
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }

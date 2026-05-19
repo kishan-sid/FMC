@@ -3,8 +3,8 @@ import { CircleDot, Mail, Lock, Eye, EyeOff, Loader2, AlertTriangle, Trophy, Act
 import { supabase, supabaseConfigured } from "../lib/supabase.js";
 
 export default function Login({ onAuthed }) {
-  const [email, setEmail] = useState("admin@football.com");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -12,6 +12,27 @@ export default function Login({ onAuthed }) {
   const submit = async (e) => {
     e.preventDefault();
     setError("");
+
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Email is required.");
+      return;
+    }
+    // RFC-5322-lite: something@something.something
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      setError("Password is required.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+
     if (!supabaseConfigured) {
       setError(
         "Supabase env not set. Create client/.env with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart npm run dev."
@@ -21,7 +42,7 @@ export default function Login({ onAuthed }) {
     setLoading(true);
     try {
       const { data, error: supaError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: trimmedEmail,
         password,
       });
       if (supaError) throw supaError;
@@ -138,12 +159,7 @@ export default function Login({ onAuthed }) {
             </div>
 
             <div>
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-slate-400">Password</label>
-                <button type="button" className="text-[11px] text-emerald-300 hover:text-emerald-200">
-                  Forgot?
-                </button>
-              </div>
+              <label className="text-xs font-medium text-slate-400">Password</label>
               <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2.5 focus-within:border-emerald-500">
                 <Lock size={14} className="text-slate-500" />
                 <input
