@@ -60,7 +60,6 @@ export default function Dashboard({ onOpenMatchdays }) {
         />
       </div>
 
-      {/* TEMP HIDDEN — uncomment to restore charts, recent matchdays & activity feed
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div className="flex items-center justify-between mb-4">
@@ -185,7 +184,6 @@ export default function Dashboard({ onOpenMatchdays }) {
           </ul>
         </div>
       </div>
-      */}
     </div>
   );
 }

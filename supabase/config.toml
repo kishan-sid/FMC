@@ -1,0 +1,26 @@
+project_id = "zqazejdkjpilckclaxkp"
+
+[functions.bootstrap-profile]
+verify_jwt = true
+
+[functions.scrape-start]
+verify_jwt = true
+
+[functions.scrape-tick]
+# Internal worker — called by another function / cron with the service-role
+# key, so JWT verification is not required.
+verify_jwt = false
+
+[functions.scrape-cancel]
+verify_jwt = true
+
+[functions.generate-export]
+verify_jwt = true
+
+[functions.export-signed-url]
+verify_jwt = true
+
+# Kept for backwards-compatibility with the old skeleton; superseded by
+# scrape-start. Safe to delete once nothing references it.
+[functions.scrape-matchday]
+verify_jwt = true

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import Topbar from "./components/Topbar.jsx";
 import Dashboard from "./views/Dashboard.jsx";
@@ -7,6 +7,7 @@ import MatchDetail from "./views/MatchDetail.jsx";
 import Players from "./views/Players.jsx";
 import Exports from "./views/Exports.jsx";
 import Login from "./views/Login.jsx";
+import { supabase } from "./lib/supabase.js";
 
 const META = {
   dashboard: { title: "Dashboard", subtitle: "Pipeline overview · last 6 matchdays" },
@@ -16,24 +17,53 @@ const META = {
   exports: { title: "Scrape & Export", subtitle: "Trigger runs and download reports" },
 };
 
-function loadUser() {
-  try {
-    const raw = localStorage.getItem("fms.user");
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+function userFromSession(session) {
+  if (!session?.user) return null;
+  const u = session.user;
+  const name = u.user_metadata?.name || u.email;
+  return {
+    id: u.id,
+    email: u.email,
+    name,
+    role: u.user_metadata?.role || "user",
+    initials: name
+      .split(/\s+/)
+      .map((s) => s[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase(),
+  };
 }
 
 export default function App() {
-  const [user, setUser] = useState(loadUser);
+  const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
+  const [bootstrapping, setBootstrapping] = useState(true);
 
-  const handleLogout = () => {
-    localStorage.removeItem("fms.user");
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(userFromSession(data.session));
+      setBootstrapping(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(userFromSession(session));
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
     setView("dashboard");
   };
+
+  if (bootstrapping) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400 text-sm">
+        Loading…
+      </div>
+    );
+  }
 
   if (!user) {
     return <Login onAuthed={(u) => setUser(u)} />;

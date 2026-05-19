@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { CircleDot, Mail, Lock, Eye, EyeOff, Loader2, AlertTriangle, Trophy, Activity, Users } from "lucide-react";
-
-// Demo credentials for the Vercel-hosted preview. No backend required.
-const DEMO_USERS = [
-  { id: "u1", email: "admin@football.com", password: "admin123", name: "Admin", role: "admin", initials: "AD" },
-  { id: "u2", email: "analyst@football.com", password: "analyst123", name: "Match Analyst", role: "analyst", initials: "MA" },
-];
+import { supabase, supabaseConfigured } from "../lib/supabase.js";
 
 export default function Login({ onAuthed }) {
   const [email, setEmail] = useState("admin@football.com");
@@ -17,20 +12,39 @@ export default function Login({ onAuthed }) {
   const submit = async (e) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
-    await new Promise((r) => setTimeout(r, 400));
-    const match = DEMO_USERS.find(
-      (u) => u.email.toLowerCase() === email.trim().toLowerCase() && u.password === password
-    );
-    if (!match) {
-      setError("Invalid email or password");
-      setLoading(false);
+    if (!supabaseConfigured) {
+      setError(
+        "Supabase env not set. Create client/.env with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart npm run dev."
+      );
       return;
     }
-    const { password: _pw, ...safeUser } = match;
-    localStorage.setItem("fms.user", JSON.stringify(safeUser));
-    onAuthed?.(safeUser);
-    setLoading(false);
+    setLoading(true);
+    try {
+      const { data, error: supaError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (supaError) throw supaError;
+
+      const u = data.user;
+      const user = {
+        id: u.id,
+        email: u.email,
+        name: u.user_metadata?.name || u.email,
+        role: u.user_metadata?.role || "user",
+        initials: (u.user_metadata?.name || u.email || "U")
+          .split(/\s+/)
+          .map((s) => s[0])
+          .slice(0, 2)
+          .join("")
+          .toUpperCase(),
+      };
+      onAuthed?.(user);
+    } catch (err) {
+      setError(err?.message || "Login failed");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

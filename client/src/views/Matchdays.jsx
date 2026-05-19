@@ -28,9 +28,6 @@ export default function Matchdays({ onOpenMatch }) {
   const md = matchdays.find((m) => m.id === selected);
   const list = matches.filter((m) => m.matchday === selected);
 
-  return <div className="p-6" />;
-
-  /* TEMP HIDDEN — original content below, restore by removing the `return <div .../>;` line above and the comment markers
   return (
     <div className="space-y-6 p-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -124,5 +121,4 @@ export default function Matchdays({ onOpenMatch }) {
       </div>
     </div>
   );
-  */
 }
