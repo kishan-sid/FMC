@@ -2,9 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "outputDirectory": "client/dist",
-  "installCommand": "echo Skipping root install — client deps install inside build",
+  "installCommand": "npm install",
   "framework": null,
+  "functions": {
+    "api/scrape/start.mjs": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

@@ -1,13 +1,12 @@
 # Vercel Deploy — FMC
 
-This repo is wired so Vercel can deploy it with **zero UI configuration**. The included root `vercel.json` tells Vercel how to find and build the client app inside `client/`.
+This repo deploys to Vercel as a full stack:
 
-## What's already set up
-
-- ✅ Root `vercel.json` — builds the client, outputs to `client/dist`, SPA fallback
-- ✅ Root `package.json` `build` script — installs client deps and builds in one go
-- ✅ `.gitignore` — `node_modules`, `dist`, `.env`, logs excluded
-- ✅ Login is fully client-side (demo creds, no backend needed)
+- React client → static build at `client/dist`
+- Scraper → Vercel serverless function at `api/scrape/start.mjs` running
+  Playwright + Lambda-compatible Chromium (`@sparticuz/chromium-min`)
+- Supabase Edge Functions (for the OpenLigaDB / Kicker path) — already
+  deployed independently to Supabase
 
 ## Step-by-step
 
@@ -16,44 +15,80 @@ This repo is wired so Vercel can deploy it with **zero UI configuration**. The i
 ```powershell
 cd C:\React-Project\FMC
 git add .
-git commit -m "Football Match Scrapper UI — ready for Vercel"
-git push -u origin main
+git commit -m "Vercel-deployable scraper"
+git push
 ```
 
-> If `main` branch doesn't exist yet: `git branch -M main` before pushing.
+### 2. Set environment variables in Vercel
 
-### 2. Import on Vercel
+**Required** — the scraper function will not work without these. Open
+**Vercel → Project → Settings → Environment Variables** and add:
 
-1. Open https://vercel.com/new
-2. Sign in with GitHub
-3. Pick the **FMC** repo → **Import**
-4. **Don't change any settings.** The root `vercel.json` already configures everything:
-   - Build Command → `npm run build`
-   - Output Directory → `client/dist`
-   - Install Command → skipped (build script installs client deps)
-5. Click **Deploy**
+| Name | Value | Environments |
+| --- | --- | --- |
+| `SUPABASE_URL` | `https://zqazejdkjpilckclaxkp.supabase.co` | Production, Preview, Development |
+| `SUPABASE_ANON_KEY` | (copy from `client/.env` — the `VITE_SUPABASE_ANON_KEY` value) | Production, Preview, Development |
+| `SUPABASE_SERVICE_ROLE_KEY` | (copy from `server/.env`) | Production, Preview, Development |
+| `VITE_SUPABASE_URL` | (same value as `SUPABASE_URL`) | Production, Preview, Development |
+| `VITE_SUPABASE_ANON_KEY` | (same value as `SUPABASE_ANON_KEY`) | Production, Preview, Development |
 
-Build runs in ~30-60 seconds. You'll get a live URL like `https://fmc-<random>.vercel.app`.
+The `VITE_*` versions are read by the client at build time; the non-prefixed
+versions are read by the serverless function at runtime.
 
-### 3. Login on the deployed site
+After adding, **redeploy** so the function picks up the new env (Deployments
+→ ⋯ → Redeploy).
 
-| Email | Password |
+### 3. Test on the live URL
+
+1. Open your Vercel URL (e.g. `https://fmc-rho-vert.vercel.app`)
+2. Log in (`admin@football.com` / supabase password from your setup)
+3. Scrape & Export → paste any URL → **Start Scrape**
+
+The first scrape after a cold start downloads Chromium (~50 MB) and takes
+~20-30 s. Subsequent scrapes are faster (~10-15 s) until the function goes
+cold again.
+
+## Pipeline routing
+
+| URL pattern | Backend |
 | --- | --- |
-| `admin@football.com` | `admin123` |
-| `analyst@football.com` | `analyst123` |
+| `*.openligadb.de` | Supabase Edge Function `scrape-tick` (free API extractor) |
+| `*.kicker.de` | Supabase Edge Function `scrape-tick` |
+| Everything else | Vercel function `/api/scrape/start` (Playwright) |
 
-Validation is client-side (no server call).
+## Limits
 
-## Notes
+| | Vercel Hobby (free) | Vercel Pro |
+| --- | --- | --- |
+| Function `maxDuration` | 60 s (configured) | 300 s |
+| Function memory | 1024 MB (configured) | up to 3008 MB |
+| Cold start with Chromium | ~5-8 s extra | same |
 
-- `server/` is **not deployed** to Vercel. It stays in the repo so you can wire up real scraping later (Render, Railway, or convert to Vercel serverless).
-- Every push to `main` triggers an automatic redeploy.
-- To redeploy manually: open the project in Vercel dashboard → **Deployments** → ⋯ → **Redeploy**.
+If a single scrape exceeds 60 s, the function will time out. The step row
+will be left in `running` state — the UI will eventually time-out its poll
+loop. For long-running scrapes, upgrade to Vercel Pro and bump `maxDuration`
+in `vercel.json` to 300.
 
-## Verify locally before pushing
+## Local dev (unchanged)
 
 ```powershell
-cd C:\React-Project\FMC
-npm run build
-# Should produce client/dist/index.html + client/dist/assets/*
+npm run dev
 ```
+
+Runs Vite on `:5173` proxying `/api/*` to the local Express server on
+`:5000`. The local Express server uses full `playwright` (bundled Chromium),
+not the Lambda variant. Behaviour is identical, just heavier.
+
+## Troubleshooting
+
+**HTTP 405 on `/api/scrape/start` in production**
+The function file wasn't deployed. Check `vercel.json` doesn't rewrite
+`/api/*` to `index.html` — current config explicitly excludes `/api/`.
+Redeploy from the dashboard.
+
+**`SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY env vars missing on Vercel`**
+You forgot step 2 above. Add env vars, redeploy.
+
+**`Function execution timed out`**
+Cold start + Cloudflare challenge + heavy page took >60 s. Upgrade to Pro
+and bump `maxDuration`, or retry (warm cache is faster).
