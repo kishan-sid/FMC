@@ -159,7 +159,9 @@ export default function Login({ onAuthed }) {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-400">Password</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-slate-400">Password</label>
+              </div>
               <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2.5 focus-within:border-emerald-500">
                 <Lock size={14} className="text-slate-500" />
                 <input

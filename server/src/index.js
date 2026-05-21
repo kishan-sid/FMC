@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import matchesRouter from "./routes/matches.js";
 import authRouter from "./routes/auth.js";
+import scrapeRouter from "./routes/scrape.js";
 
 dotenv.config();
 
@@ -18,6 +19,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/matches", matchesRouter);
+app.use("/api/scrape", scrapeRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

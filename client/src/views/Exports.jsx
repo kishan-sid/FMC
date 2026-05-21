@@ -16,6 +16,16 @@ const STEP_NAMES = [
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
 
+// Edge Function path handles openligadb / kicker.de (purpose-built API
+// extractor). Every other URL goes through the Express + Playwright
+// pipeline which is content-aware (match, standings, list, generic table).
+function useEdgeFunctionFor(u) {
+  try {
+    const h = new URL(u).hostname;
+    return /(^|\.)openligadb\.de$/i.test(h) || /(^|\.)kicker\.de$/i.test(h);
+  } catch { return false; }
+}
+
 function placeholderSteps() {
   return STEP_NAMES.map((name, i) => ({
     id: `placeholder-${i + 1}`,
@@ -194,24 +204,62 @@ export default function Exports() {
     setSteps(placeholderSteps());
 
     try {
-      const { data, error: startErr } = await supabase.functions.invoke("scrape-start", {
-        body: { source_url: url.trim() },
-      });
-      if (startErr) throw startErr;
-      const startedJob = data?.job;
+      const trimmed = url.trim();
+      const useExpress = !useEdgeFunctionFor(trimmed);
+
+      let startedJob;
+      let initialSteps;
+      if (useExpress) {
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (!token) throw new Error("Not signed in");
+        const res = await fetch("/api/scrape/start", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ source_url: trimmed }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+        startedJob = payload.job;
+        initialSteps = payload.steps;
+      } else {
+        const { data, error: startErr } = await supabase.functions.invoke("scrape-start", {
+          body: { source_url: trimmed },
+        });
+        if (startErr) throw startErr;
+        startedJob = data?.job;
+        initialSteps = data?.steps;
+      }
+
       if (!startedJob) throw new Error("scrape-start returned no job");
       setJob(startedJob);
-      setSteps(data?.steps?.length ? data.steps : placeholderSteps());
+      setSteps(initialSteps?.length ? initialSteps : placeholderSteps());
 
-      let current = startedJob;
-      while (current && !TERMINAL.has(current.status)) {
-        if (cancelRef.current) break;
-        const { data: tick, error: tickErr } = await supabase.functions.invoke("scrape-tick", {
-          body: { job_id: current.id },
-        });
-        if (tickErr) throw tickErr;
-        current = tick?.job ?? current;
-        await new Promise((r) => setTimeout(r, 300));
+      if (useExpress) {
+        // Express runs the pipeline async server-side; UI just polls the job
+        // row until it's terminal. Realtime sub already updates per-step UI.
+        let current = startedJob;
+        while (current && !TERMINAL.has(current.status)) {
+          if (cancelRef.current) break;
+          await new Promise((r) => setTimeout(r, 700));
+          const { data: row } = await supabase
+            .from("scrape_jobs").select("*").eq("id", current.id).maybeSingle();
+          if (row) current = row;
+        }
+      } else {
+        let current = startedJob;
+        while (current && !TERMINAL.has(current.status)) {
+          if (cancelRef.current) break;
+          const { data: tick, error: tickErr } = await supabase.functions.invoke("scrape-tick", {
+            body: { job_id: current.id },
+          });
+          if (tickErr) throw tickErr;
+          current = tick?.job ?? current;
+          await new Promise((r) => setTimeout(r, 300));
+        }
       }
 
       await loadExports();
