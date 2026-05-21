@@ -15,7 +15,7 @@
     "concurrently": "^9.1.0"
   },
   "dependencies": {
-    "@sparticuz/chromium-min": "^131.0.1",
+    "@sparticuz/chromium-min": "^148.0.0",
     "@supabase/supabase-js": "^2.106.1",
     "@vercel/functions": "^1.6.0",
     "playwright-core": "^1.60.0"

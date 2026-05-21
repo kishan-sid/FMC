@@ -27,11 +27,11 @@ export const config = {
 // Public Chromium tarball matching @sparticuz/chromium-min major version.
 // Update this when bumping the chromium-min dep.
 const CHROMIUM_TAR =
-  "https://github.com/Sparticuz/chromium/releases/download/v131.0.0/chromium-v131.0.0-pack.tar";
+  "https://github.com/Sparticuz/chromium/releases/download/v148.0.0/chromium-v148.0.0-pack.x64.tar";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
 // ---------------------------------------------------------------------
 // HTTP handler
@@ -266,10 +266,20 @@ async function scrapeUrl(url, { onProgress } = {}) {
   try { new URL(url); } catch { throw new Error("source_url must be a valid URL"); }
 
   const executablePath = await sparticuzChromium.executablePath(CHROMIUM_TAR);
+
+  // sparticuz extracts shared libs (libnss3.so etc.) into /tmp; make sure
+  // the Chromium binary can find them. Some Vercel environments don't
+  // inherit LD_LIBRARY_PATH set by the library — set it explicitly.
+  const libDir = "/tmp/al2023/lib:/tmp/al2/lib:/tmp/aws/lib:/tmp/lib";
+  process.env.LD_LIBRARY_PATH = process.env.LD_LIBRARY_PATH
+    ? `${process.env.LD_LIBRARY_PATH}:${libDir}`
+    : libDir;
+  process.env.FONTCONFIG_PATH = process.env.FONTCONFIG_PATH || "/tmp/fonts";
+
   const browser = await playwrightChromium.launch({
     args: sparticuzChromium.args,
     executablePath,
-    headless: true,
+    headless: sparticuzChromium.headless ?? true,
   });
   try {
     const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 1600 } });
