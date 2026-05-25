@@ -185,8 +185,14 @@ function shapeMatchDetail(url, dom) {
       lineup_rows: dom.lineupRows,
     },
     csv_rows,
-    csv_filename_hint: `match-${spielnummer || "x"}-${(date || "unknown").replace(/-/g, "")}`,
+    csv_filename_hint: matchFilename(homeName, awayName, spielnummer),
   };
+}
+
+function matchFilename(home, away, spielnummer) {
+  if (home && away) return friendlyName(`${home} vs ${away}`);
+  if (home || away) return friendlyName(home || away);
+  return friendlyName(spielnummer ? `Match ${spielnummer}` : "Match");
 }
 
 function pickStandingsTables(tables) {
@@ -259,8 +265,21 @@ function shapeStandings(url, dom, tables) {
     summary,
     data: { groups, group_count: groups.length, team_count: totalTeams },
     csv_rows,
-    csv_filename_hint: `standings-${slug(pageTitle)}`,
+    csv_filename_hint: standingsFilename(pageTitle, groups),
   };
+}
+
+function standingsFilename(pageTitle, groups) {
+  // Prefer the first group label (e.g. "3RD LEAGUE - GROUP 1") when it carries
+  // league info; otherwise fall back to the page title.
+  const firstLabel = groups[0]?.label || "";
+  const base = firstLabel.length > 4 && /[a-z]/i.test(firstLabel) ? firstLabel : pageTitle;
+  if (groups.length > 1) {
+    // Strip any trailing "Group N" so a multi-group export reads cleanly.
+    const cleaned = base.replace(/\s*[-–]\s*Group\s*\d+\s*$/i, "").trim() || base;
+    return friendlyName(`${cleaned} Standings`);
+  }
+  return friendlyName(base);
 }
 
 function pickMatchListTable(tables) {
@@ -291,7 +310,7 @@ function shapeMatchList(url, dom, table) {
     summary: `Match list · ${body.length} rows`,
     data: { rows: body.length },
     csv_rows,
-    csv_filename_hint: `matchlist-${slug(dom.h1?.[0] || dom.title || "list")}`,
+    csv_filename_hint: friendlyName(`${dom.h1?.[0] || dom.title || "Match List"} Matches`),
   };
 }
 
@@ -309,7 +328,7 @@ function shapeGeneric(url, dom) {
       summary: `Generic table · ${body.length} rows`,
       data: { rows: body.length },
       csv_rows: [head, ...body],
-      csv_filename_hint: `table-${slug(dom.title || "page")}`,
+      csv_filename_hint: friendlyName(dom.h1?.[0] || dom.title || "Table"),
     };
   }
 
@@ -323,7 +342,7 @@ function shapeGeneric(url, dom) {
       ["title", "url", "h1", "text_snippet"],
       [dom.title || "", url, (dom.h1 || []).join(" | "), dom.mainText.slice(0, 1000)],
     ],
-    csv_filename_hint: `page-${slug(dom.title || "page")}`,
+    csv_filename_hint: friendlyName(dom.h1?.[0] || dom.title || "Page"),
   };
 }
 
@@ -342,4 +361,22 @@ function slug(s) {
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
     .slice(0, 40) || "page";
+}
+
+// Build a download-friendly filename stem from an arbitrary title. Keeps the
+// name human-readable (letters, digits, spaces, dashes, parens, ampersand)
+// and truncates long titles at a word boundary so the final filename stays
+// under ~60 chars before the date/extension are appended.
+function friendlyName(s, maxLen = 60) {
+  const cleaned = String(s ?? "")
+    .replace(/[ -]/g, "")
+    .replace(/[/\\:*?"<>|]+/g, " ")
+    .replace(/[·•|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "scrape";
+  if (cleaned.length <= maxLen) return cleaned;
+  const cut = cleaned.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim();
 }

@@ -440,7 +440,6 @@ async function stepBuildExport(sb: any, job: Job): Promise<string> {
   }
 
   const rowCount = Math.max(rows.length - 1, 0);
-  const headers = rows[0] ?? [];
   const body = rows.slice(1);
 
   const csvBytes = new TextEncoder().encode(
@@ -448,8 +447,15 @@ async function stepBuildExport(sb: any, job: Job): Promise<string> {
   );
   const xlsxBytes = buildSimpleXlsx(headers, body);
 
+  // Prefer the matchday label ("Bundesliga · Spieltag 33") over the synthetic
+  // matchday_id ("md-33") so downloads land with a human-readable filename.
+  const { data: mdRow } = await sb.from("matchdays")
+    .select("label, competition")
+    .eq("id", job.matchday_id)
+    .maybeSingle();
+  const labelSrc = mdRow?.label || mdRow?.competition || job.matchday_id || "export";
   const stamp = new Date().toISOString().slice(0, 10);
-  const stem = `${job.matchday_id ?? "export"}-${stamp}`;
+  const stem = `${friendlyName(labelSrc)} ${stamp}`;
 
   const uploads = [
     {
@@ -500,4 +506,21 @@ function csvCell(v: unknown): string {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
+}
+
+// Download-friendly filename stem. Strips filesystem-unsafe chars but keeps
+// spaces / parens so titles like "Bundesliga · Spieltag 33" stay readable.
+function friendlyName(s: string, maxLen = 60): string {
+  const cleaned = String(s ?? "")
+    // deno-lint-ignore no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/[/\\:*?"<>|]+/g, " ")
+    .replace(/[·•]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "scrape";
+  if (cleaned.length <= maxLen) return cleaned;
+  const cut = cleaned.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim();
 }

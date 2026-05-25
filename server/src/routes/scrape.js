@@ -266,8 +266,12 @@ async function buildExport(sb, job, s) {
   );
   const xlsxBytes = buildSimpleXlsx(headers, body);
 
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const hint = (s.csv_filename_hint || s.kind || "scrape").replace(/[^a-z0-9-]+/gi, "-");
+  const stamp = new Date().toISOString().slice(0, 10);
+  // csv_filename_hint is already user-friendly (built by the scraper). Strip
+  // only chars that would break storage paths; keep spaces, parens, etc.
+  const hint = (s.csv_filename_hint || s.kind || "scrape")
+    .replace(/[/\\]+/g, "-")
+    .trim() || "scrape";
 
   const { data: jobRow } = await sb.from("scrape_jobs").select("matchday_id").eq("id", job.id).single();
   const matchdayId = jobRow?.matchday_id ?? null;
