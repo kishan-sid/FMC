@@ -46,11 +46,16 @@ export async function scrapeUrl(url, { onProgress } = {}) {
   let html;
   try {
     html = await fetchHtmlDirect(url);
+    // Some sites serve the Cloudflare challenge with HTTP 200 — body is the
+    // "Just a moment" wall, not the real content. Treat that exactly like a
+    // 403 and escalate to the proxy/ScraperAPI fallbacks.
+    if (isInterstitial(html)) {
+      onProgress?.({ phase: "navigate", detail: "Cloudflare challenge on direct fetch — falling back" });
+      html = await fetchHtmlViaFallbacks(url, onProgress);
+    }
   } catch (err) {
     const status = err?.response?.status;
     if (status === 403 || status === 429 || status === 451) {
-      // Datacenter IP / anti-bot block. Try free proxies first, then
-      // ScraperAPI (residential IPs + anti-bot) if a key is configured.
       onProgress?.({ phase: "navigate", detail: `Direct ${status} — falling back to proxy` });
       html = await fetchHtmlViaFallbacks(url, onProgress);
     } else if (status) {
@@ -58,6 +63,15 @@ export async function scrapeUrl(url, { onProgress } = {}) {
     } else {
       throw err;
     }
+  }
+
+  // Final safety check — refuse to extract data out of a Cloudflare challenge
+  // page so the user never gets a "Just a moment" row in their export.
+  if (isInterstitial(html)) {
+    throw new Error(
+      "Site is Cloudflare-protected and the bypass attempts didn't return real content. " +
+      "Run from the local server, retry in a minute (proxy IP may rotate), or upgrade to a Cloudflare-specialized scraper.",
+    );
   }
 
   onProgress?.({ phase: "extract" });
@@ -143,31 +157,52 @@ async function fetchHtmlViaScraperAPI(url) {
   if (!key) throw new Error("SCRAPERAPI_KEY not configured");
   const country = countryCodeForHost(new URL(url).hostname);
 
-  // Three-tier escalation. ScraperAPI bills more for each tier; we only pay
-  // the next tier's price when the previous one didn't break through.
-  //   tier 1: bare fetch                    →  1 credit  (IP-block sites)
-  //   tier 2: render + premium proxy        → 25 credits (basic Cloudflare)
-  //   tier 3: render + ultra_premium proxy  → 75 credits (hardest Cloudflare)
+  // Three-tier escalation. Each tier may retry intra-tier on Cloudflare
+  // interstitial because the next proxy IP often succeeds where the
+  // previous one was already challenged.
+  //   tier 1: bare fetch                   →   1 credit  (IP-only blocks)
+  //   tier 2: render + premium             →  25 credits (basic Cloudflare)
+  //   tier 3: render + ultra_premium       →  75 credits (hardest Cloudflare)
+  //
+  // `wait` makes the headless browser linger 5s after page load so the
+  // Cloudflare JS challenge has time to resolve before HTML is captured.
   const tiers = [
-    { name: "basic", params: {} },
-    { name: "premium+render", params: { render: "true", premium: "true" } },
-    { name: "ultra_premium+render", params: { render: "true", ultra_premium: "true" } },
+    { name: "basic", params: {}, attempts: 1 },
+    {
+      name: "premium+render",
+      params: { render: "true", premium: "true", wait: "5000" },
+      attempts: 2,
+    },
+    {
+      name: "ultra_premium+render",
+      params: { render: "true", ultra_premium: "true", wait: "8000" },
+      attempts: 3,
+    },
   ];
 
   let lastBody = "";
+  let lastErr = null;
   for (const tier of tiers) {
-    try {
-      const body = await callScraperAPI(key, url, country, tier.params);
-      if (!isInterstitial(body)) return body;
-      lastBody = body;
-    } catch (err) {
-      // Bubble up unless this is the last tier; otherwise try the next tier.
-      if (tier === tiers[tiers.length - 1]) throw err;
+    for (let attempt = 1; attempt <= tier.attempts; attempt++) {
+      try {
+        const body = await callScraperAPI(key, url, country, tier.params);
+        if (!isInterstitial(body)) return body;
+        lastBody = body;
+      } catch (err) {
+        lastErr = err;
+      }
+      // Brief backoff before retrying within the same tier — gives ScraperAPI
+      // a moment to rotate to a different proxy IP.
+      if (attempt < tier.attempts) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
   }
+  if (lastErr && !lastBody) throw lastErr;
   throw new Error(
     `ScraperAPI couldn't bypass the site's anti-bot challenge across all tiers ` +
-    `(last response was a ${lastBody.length}B challenge page).`,
+    `(last response was a ${lastBody.length}B challenge page). ` +
+    `This site may need a Cloudflare-specialized service (ZenRows / Bright Data Web Unlocker).`,
   );
 }
 
