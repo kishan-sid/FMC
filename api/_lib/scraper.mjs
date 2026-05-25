@@ -49,10 +49,10 @@ export async function scrapeUrl(url, { onProgress } = {}) {
   } catch (err) {
     const status = err?.response?.status;
     if (status === 403 || status === 429 || status === 451) {
-      // Datacenter IP / anti-bot block. Free public proxies route the
-      // request through their infra, sidestepping the IP-based block.
+      // Datacenter IP / anti-bot block. Try free proxies first, then
+      // ScraperAPI (residential IPs + anti-bot) if a key is configured.
       onProgress?.({ phase: "navigate", detail: `Direct ${status} — falling back to proxy` });
-      html = await fetchHtmlViaProxy(url);
+      html = await fetchHtmlViaFallbacks(url, onProgress);
     } else if (status) {
       throw new Error(`${url} returned HTTP ${status}`);
     } else {
@@ -66,6 +66,26 @@ export async function scrapeUrl(url, { onProgress } = {}) {
 
   onProgress?.({ phase: "classify" });
   return classifyAndShape(url, dom);
+}
+
+async function fetchHtmlViaFallbacks(url, onProgress) {
+  const errors = [];
+  try {
+    return await fetchHtmlViaProxy(url);
+  } catch (err) {
+    errors.push(err.message);
+  }
+  if (process.env.SCRAPERAPI_KEY) {
+    try {
+      onProgress?.({ phase: "navigate", detail: "Free proxies failed — trying ScraperAPI" });
+      return await fetchHtmlViaScraperAPI(url);
+    } catch (err) {
+      errors.push(`ScraperAPI → ${err.message}`);
+    }
+  } else {
+    errors.push("SCRAPERAPI_KEY env var not set — paid fallback skipped");
+  }
+  throw new Error(`All fetch strategies failed. ${errors.join(" | ")}`);
 }
 
 async function fetchHtmlDirect(url) {
@@ -100,7 +120,6 @@ async function fetchHtmlViaProxy(url) {
         validateStatus: (s) => s >= 200 && s < 400,
       });
       const body = typeof res.data === "string" ? res.data : "";
-      // Sanity check: a real HTML page should have at least a tag we recognize.
       if (body.length > 500 && /<\/?(html|body|table|div)/i.test(body)) {
         return body;
       }
@@ -110,10 +129,53 @@ async function fetchHtmlViaProxy(url) {
       errors.push(`${hostOf(proxyUrl)} → ${s || err.message}`);
     }
   }
-  throw new Error(
-    `Direct request was blocked AND all fallback proxies failed: ${errors.join("; ")}. ` +
-    `Run the scrape from the local server, or wire up a paid scraping service for this host.`,
-  );
+  throw new Error(`free proxies failed: ${errors.join("; ")}`);
+}
+
+// ScraperAPI fallback — residential IP rotation + anti-bot bypass. Free tier:
+// 1000 credits/month. Set SCRAPERAPI_KEY in Vercel env vars to enable.
+// Geo-targets the site's country when known so the request comes from a
+// nearby residential IP (matters for sites that geo-fence or rate-limit
+// foreign-origin requests).
+async function fetchHtmlViaScraperAPI(url) {
+  const key = process.env.SCRAPERAPI_KEY;
+  if (!key) throw new Error("SCRAPERAPI_KEY not configured");
+
+  const params = new URLSearchParams({
+    api_key: key,
+    url,
+    keep_headers: "true",
+  });
+  const country = countryCodeForHost(new URL(url).hostname);
+  if (country) params.set("country_code", country);
+
+  const apiUrl = `https://api.scraperapi.com/?${params.toString()}`;
+  const res = await axios.get(apiUrl, {
+    headers: browserHeaders(url),
+    timeout: 60000,
+    responseType: "text",
+    decompress: true,
+    validateStatus: () => true,
+  });
+  if (res.status >= 400) {
+    throw new Error(`ScraperAPI HTTP ${res.status}${res.data ? ` — ${String(res.data).slice(0, 200)}` : ""}`);
+  }
+  const body = typeof res.data === "string" ? res.data : "";
+  if (body.length < 500 || !/<\/?(html|body|table|div)/i.test(body)) {
+    throw new Error(`ScraperAPI returned ${body.length}B (no HTML markers)`);
+  }
+  return body;
+}
+
+function countryCodeForHost(host) {
+  if (/\.ch$/i.test(host)) return "ch";
+  if (/\.de$/i.test(host)) return "de";
+  if (/\.at$/i.test(host)) return "at";
+  if (/\.fr$/i.test(host)) return "fr";
+  if (/\.it$/i.test(host)) return "it";
+  if (/\.es$/i.test(host)) return "es";
+  if (/\.uk$/i.test(host)) return "gb";
+  return null;
 }
 
 function hostOf(u) { try { return new URL(u).hostname; } catch { return u; } }
