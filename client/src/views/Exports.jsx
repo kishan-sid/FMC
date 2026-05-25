@@ -335,13 +335,30 @@ export default function Exports() {
 
   const handleQuickExport = useCallback(async (format) => {
     setError("");
-    const { data, error: err } = await supabase.functions.invoke("generate-export", {
-      body: { format, matchday_id: job?.matchday_id ?? null },
-    });
-    if (err) { setError(err.message); return; }
-    await loadExports();
-    if (data?.export) await handleDownload(data.export);
-  }, [job?.matchday_id, loadExports, handleDownload]);
+    if (!job?.id) {
+      setError("Run a scrape first — quick downloads use the latest scrape.");
+      return;
+    }
+    // The pipeline writes both CSV and XLSX exports as part of buildExport.
+    // Pick the newest export of the requested format created since this job
+    // started, regardless of whether it has a matchday_id (non-match scrapes
+    // like standings/lists won't).
+    let q = supabase
+      .from("exports")
+      .select("*")
+      .eq("format", format)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (job.started_at) q = q.gte("created_at", job.started_at);
+    const { data: rows, error: lookupErr } = await q;
+    if (lookupErr) { setError(lookupErr.message); return; }
+    const exp = rows?.[0];
+    if (!exp) {
+      setError(`No ${format.toUpperCase()} available yet — wait for the scrape to finish.`);
+      return;
+    }
+    await handleDownload(exp);
+  }, [job?.id, job?.started_at, handleDownload]);
 
   const progress = job
     ? Math.round(job.progress_percent ?? ((job.current_step ?? 0) / (job.total_steps ?? 6) * 100))

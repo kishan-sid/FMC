@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { serviceClient, requireUser } from "../lib/supabase.js";
 import { scrapeUrl } from "../scraper/generic.js";
+import { buildSimpleXlsx } from "../scraper/xlsx.js";
 
 const router = Router();
 
@@ -103,7 +104,11 @@ async function runPipeline(job) {
         : `Fixture captured · match not yet played`;
     }
     if (s.kind === "standings") {
-      return `${s.data.rows.length} standings rows captured`;
+      const teams = s.data.team_count ?? 0;
+      const groups = s.data.group_count ?? 1;
+      return groups > 1
+        ? `${teams} standings rows across ${groups} groups captured`
+        : `${teams} standings rows captured`;
     }
     if (s.kind === "match_list") {
       return `${s.data.rows} match rows captured`;
@@ -252,36 +257,62 @@ async function upsertMatch(sb, job, s, mdId, matchId) {
 
 async function buildExport(sb, job, s) {
   const rows = s.csv_rows ?? [];
-  const csv = rows.map((r) => r.map(csvCell).join(",")).join("\n");
-  const bytes = new TextEncoder().encode(csv);
+  const rowCount = Math.max(rows.length - 1, 0);
+  const headers = rows[0] ?? [];
+  const body = rows.slice(1);
+
+  const csvBytes = new TextEncoder().encode(
+    rows.map((r) => r.map(csvCell).join(",")).join("\n"),
+  );
+  const xlsxBytes = buildSimpleXlsx(headers, body);
 
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const hint = (s.csv_filename_hint || s.kind || "scrape").replace(/[^a-z0-9-]+/gi, "-");
-  const filename = `${hint}-${stamp}.csv`;
-  const path = `${job.user_id}/${filename}`;
 
-  const { error: upErr } = await sb.storage.from("exports").upload(path, bytes, {
-    contentType: "text/csv",
-    upsert: true,
-  });
-  if (upErr) throw upErr;
-
-  // Best-effort matchday_id tie-in (only set for match-kind scrapes).
   const { data: jobRow } = await sb.from("scrape_jobs").select("matchday_id").eq("id", job.id).single();
+  const matchdayId = jobRow?.matchday_id ?? null;
 
-  const { data: exportRow, error: insErr } = await sb.from("exports").insert({
-    user_id: job.user_id,
-    file: filename,
-    size_bytes: bytes.length,
-    rows: Math.max(rows.length - 1, 0),
-    format: "csv",
-    storage_path: path,
-    matchday_id: jobRow?.matchday_id ?? null,
-  }).select().single();
-  if (insErr) throw insErr;
+  const uploads = [
+    {
+      format: "csv",
+      filename: `${hint}-${stamp}.csv`,
+      contentType: "text/csv",
+      bytes: csvBytes,
+    },
+    {
+      format: "xlsx",
+      filename: `${hint}-${stamp}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      bytes: xlsxBytes,
+    },
+  ];
 
-  await sb.from("scrape_jobs").update({ export_id: exportRow.id }).eq("id", job.id);
-  return { filename, rowCount: Math.max(rows.length - 1, 0), bytes: bytes.length };
+  let primaryExport = null;
+  for (const u of uploads) {
+    const path = `${job.user_id}/${u.filename}`;
+    const { error: upErr } = await sb.storage.from("exports").upload(path, u.bytes, {
+      contentType: u.contentType,
+      upsert: true,
+    });
+    if (upErr) throw upErr;
+
+    const { data: exportRow, error: insErr } = await sb.from("exports").insert({
+      user_id: job.user_id,
+      file: u.filename,
+      size_bytes: u.bytes.length,
+      rows: rowCount,
+      format: u.format,
+      storage_path: path,
+      matchday_id: matchdayId,
+    }).select().single();
+    if (insErr) throw insErr;
+    if (u.format === "xlsx") primaryExport = exportRow;
+  }
+
+  if (primaryExport) {
+    await sb.from("scrape_jobs").update({ export_id: primaryExport.id }).eq("id", job.id);
+  }
+  return { filename: uploads[1].filename, rowCount, bytes: xlsxBytes.length };
 }
 
 function csvCell(v) {

@@ -65,9 +65,33 @@ function extractDom() {
   const mainText = clean(main?.innerText || "");
   const fullText = clean(document.body?.innerText || "");
 
+  // Walk up from `el` looking for the closest preceding heading-like text so we
+  // can label each table (e.g. "3RD LEAGUE - GROUP 1"). Falls back to the
+  // table's caption / first single-cell row if no sibling heading is found.
+  const sectionLabelFor = (el) => {
+    let cursor = el;
+    for (let hop = 0; hop < 4 && cursor; hop++) {
+      let sib = cursor.previousElementSibling;
+      while (sib) {
+        const txt = clean(sib.innerText || sib.textContent || "");
+        if (txt && txt.length <= 120 && /[a-zA-Z]/.test(txt)) {
+          if (sib.matches?.("h1,h2,h3,h4,h5,h6,caption,legend")) return txt;
+          if (txt.length <= 60) return txt;
+        }
+        sib = sib.previousElementSibling;
+      }
+      cursor = cursor.parentElement;
+    }
+    const cap = el.querySelector?.("caption");
+    if (cap) return clean(cap.textContent);
+    const firstRow = el.rows?.[0];
+    if (firstRow && firstRow.cells.length === 1) return clean(firstRow.cells[0].textContent);
+    return "";
+  };
+
   const tables = [...document.querySelectorAll("table")].map((t, i) => {
     const rows = [...t.rows].map((r) => [...r.cells].map((c) => clean(c.textContent)));
-    return { idx: i, rowCount: rows.length, rows };
+    return { idx: i, rowCount: rows.length, rows, section: sectionLabelFor(t) };
   }).filter((t) => t.rowCount > 0);
 
   const matchPanel =
@@ -104,9 +128,9 @@ function classifyAndShape(url, dom) {
     return shapeMatchDetail(url, dom);
   }
 
-  // 2. Standings table — numeric-heavy table with a "team" column + final-row points
-  const standings = pickStandingsTable(dom.tables);
-  if (standings) return shapeStandings(url, dom, standings);
+  // 2. Standings table(s) — numeric-heavy tables with a "team" column + final-row points
+  const standings = pickStandingsTables(dom.tables);
+  if (standings.length) return shapeStandings(url, dom, standings);
 
   // 3. Match list — rows like "DD.MM.YYYY HH:MM Home - Away" or similar
   const matchList = pickMatchListTable(dom.tables);
@@ -165,23 +189,26 @@ function shapeMatchDetail(url, dom) {
   };
 }
 
-function pickStandingsTable(tables) {
+function pickStandingsTables(tables) {
   // Heuristic: most rows start with "1."/"2."/"3." (position) and the table
   // contains either a "GF:GA" cell ("4 : 3") OR has a lone ":" separator cell.
+  // Returns ALL matching tables so multi-group pages (e.g. "3rd League — Group
+  // 1 / Group 2") export every group, not just the first.
+  const matches = [];
   for (const t of tables) {
     if (t.rows.length < 2) continue;
     const numericLead = t.rows.filter((r) => /^\d+\.?$/.test(r[0] || "")).length;
     const hasJoinedScore = t.rows.some((r) => r.some((c) => /^\d+\s*:\s*\d+$/.test(c)));
     const hasSplitScore  = t.rows.some((r) => r.some((c) => c === ":"));
-    if (numericLead >= 2 && (hasJoinedScore || hasSplitScore)) return t;
+    if (numericLead >= 2 && (hasJoinedScore || hasSplitScore)) matches.push(t);
   }
-  return null;
+  return matches;
 }
 
-function shapeStandings(url, dom, table) {
+function parseStandingsRows(table) {
   // Common SFV layout: Pos | Team | MP | W | D | L | GF | : | GA | GD | Pts | (logo?)
   // Compact to: position, team, mp, w, d, l, gf, ga, gd, pts
-  const rows = table.rows
+  return table.rows
     .filter((r) => /^\d+\.?$/.test(r[0] || ""))
     .map((r) => {
       // Re-glue "X : Y" if it landed in three cells (X, ":", Y)
@@ -193,7 +220,6 @@ function shapeStandings(url, dom, table) {
         ga = cells[idx + 1];
         cells.splice(idx - 1, 3, `${gf}:${ga}`);
       }
-      // Now expected layout: [pos, team, mp, w, d, l, gf:ga, gd, pts, ...]
       const [pos, team, mp, w, d, l, gfga, gd, pts] = cells;
       if (gf == null && gfga) {
         const m = String(gfga).match(/^(\d+)\s*:\s*(\d+)$/);
@@ -201,22 +227,39 @@ function shapeStandings(url, dom, table) {
       }
       return { pos: stripDot(pos), team, mp, w, d, l, gf: gf ?? "", ga: ga ?? "", gd, pts };
     });
+}
 
-  const groupTitle = dom.h3?.[0] || dom.h1?.[0] || "Standings";
+function shapeStandings(url, dom, tables) {
+  const pageTitle = dom.h1?.[0] || dom.h3?.[0] || dom.title || "Standings";
+  const groups = tables.map((t) => ({
+    label: t.section || pageTitle,
+    rows: parseStandingsRows(t),
+  })).filter((g) => g.rows.length > 0);
 
+  const totalTeams = groups.reduce((n, g) => n + g.rows.length, 0);
   const csv_rows = [
-    ["position", "team", "mp", "w", "d", "l", "gf", "ga", "gd", "pts"],
-    ...rows.map((r) => [r.pos, r.team, r.mp, r.w, r.d, r.l, r.gf, r.ga, r.gd, r.pts]),
+    [
+      "Group", "Position", "Team",
+      "Matches Played", "Wins", "Draws", "Losses",
+      "Goals For", "Goals Against", "Goal Difference", "Points",
+    ],
+    ...groups.flatMap((g) =>
+      g.rows.map((r) => [g.label, r.pos, r.team, r.mp, r.w, r.d, r.l, r.gf, r.ga, r.gd, r.pts]),
+    ),
   ];
+
+  const summary = groups.length > 1
+    ? `Standings · ${groups.length} groups · ${totalTeams} teams`
+    : `Standings · ${groups[0]?.label ?? pageTitle} · ${totalTeams} teams`;
 
   return {
     kind: "standings",
     source_url: url,
     title: dom.title,
-    summary: `Standings · ${groupTitle} · ${rows.length} teams`,
-    data: { group: groupTitle, rows },
+    summary,
+    data: { groups, group_count: groups.length, team_count: totalTeams },
     csv_rows,
-    csv_filename_hint: `standings-${slug(groupTitle)}`,
+    csv_filename_hint: `standings-${slug(pageTitle)}`,
   };
 }
 
