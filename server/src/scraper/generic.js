@@ -370,8 +370,9 @@ function slug(s) {
 function friendlyName(s, maxLen = 60) {
   const cleaned = String(s ?? "")
     .replace(/[ -]/g, "")
-    .replace(/[/\\:*?"<>|]+/g, " ")
+    .replace(/[/\\:*?"<>|+&#%=@]+/g, " ")
     .replace(/[·•|]+/g, "-")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return "scrape";

@@ -545,9 +545,11 @@ function stripDot(s) { return String(s ?? "").replace(/\.$/, ""); }
 
 export function friendlyName(s, maxLen = 60) {
   const cleaned = String(s ?? "")
-    .replace(/[\x00-\x1f\x7f]/g, "")
-    .replace(/[/\\:*?"<>|]+/g, " ")
-    .replace(/[·•]+/g, "-")
+    .normalize("NFD")                            // split combining marks
+    .replace(/[̀-ͯ]/g, "")             // strip combining marks (ü→u, ö→o, é→e)
+    .replace(/[\x00-\x1f\x7f]/g, "")             // control chars
+    .replace(/[/\\:*?"<>|+&#%=@]+/g, " ")        // filesystem-unsafe + URL-reserved chars
+    .replace(/[·•]+/g, "-")                      // bullets → dash
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return "scrape";
