@@ -10,23 +10,60 @@ import * as cheerio from "cheerio";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36";
+
+// Full set of headers a real Chrome 132 on Windows sends for a top-level
+// navigation. Many anti-bot WAFs (matchcenter.afv.ch included) 403 plain
+// axios requests because the Sec-Fetch-* / Sec-Ch-Ua-* / Accept-Encoding
+// combination is missing.
+function browserHeaders(url) {
+  const { origin } = new URL(url);
+  return {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Sec-Ch-Ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Referer": origin + "/",
+  };
+}
 
 export async function scrapeUrl(url, { onProgress } = {}) {
   try { new URL(url); } catch { throw new Error("source_url must be a valid URL"); }
 
   onProgress?.({ phase: "navigate", detail: url });
-  const res = await axios.get(url, {
-    headers: {
-      "User-Agent": UA,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
-    },
-    timeout: 30000,
-    responseType: "text",
-    decompress: true,
-    validateStatus: (s) => s >= 200 && s < 400,
-  });
+
+  let res;
+  try {
+    res = await axios.get(url, {
+      headers: browserHeaders(url),
+      timeout: 30000,
+      responseType: "text",
+      decompress: true,
+      maxRedirects: 5,
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+  } catch (err) {
+    const status = err?.response?.status;
+    if (status === 403 || status === 429) {
+      throw new Error(
+        `${url} returned ${status} — the site is blocking the request (likely datacenter-IP / anti-bot). ` +
+        `Run the scrape from the local server, or use a proxy/scraping-service for this host.`,
+      );
+    }
+    if (status) throw new Error(`${url} returned HTTP ${status}`);
+    throw err;
+  }
 
   onProgress?.({ phase: "extract" });
   const $ = cheerio.load(res.data);
