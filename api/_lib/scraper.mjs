@@ -43,35 +43,80 @@ export async function scrapeUrl(url, { onProgress } = {}) {
 
   onProgress?.({ phase: "navigate", detail: url });
 
-  let res;
+  let html;
   try {
-    res = await axios.get(url, {
-      headers: browserHeaders(url),
-      timeout: 30000,
-      responseType: "text",
-      decompress: true,
-      maxRedirects: 5,
-      validateStatus: (s) => s >= 200 && s < 400,
-    });
+    html = await fetchHtmlDirect(url);
   } catch (err) {
     const status = err?.response?.status;
-    if (status === 403 || status === 429) {
-      throw new Error(
-        `${url} returned ${status} — the site is blocking the request (likely datacenter-IP / anti-bot). ` +
-        `Run the scrape from the local server, or use a proxy/scraping-service for this host.`,
-      );
+    if (status === 403 || status === 429 || status === 451) {
+      // Datacenter IP / anti-bot block. Free public proxies route the
+      // request through their infra, sidestepping the IP-based block.
+      onProgress?.({ phase: "navigate", detail: `Direct ${status} — falling back to proxy` });
+      html = await fetchHtmlViaProxy(url);
+    } else if (status) {
+      throw new Error(`${url} returned HTTP ${status}`);
+    } else {
+      throw err;
     }
-    if (status) throw new Error(`${url} returned HTTP ${status}`);
-    throw err;
   }
 
   onProgress?.({ phase: "extract" });
-  const $ = cheerio.load(res.data);
+  const $ = cheerio.load(html);
   const dom = extractDom($);
 
   onProgress?.({ phase: "classify" });
   return classifyAndShape(url, dom);
 }
+
+async function fetchHtmlDirect(url) {
+  const res = await axios.get(url, {
+    headers: browserHeaders(url),
+    timeout: 30000,
+    responseType: "text",
+    decompress: true,
+    maxRedirects: 5,
+    validateStatus: (s) => s >= 200 && s < 400,
+  });
+  return res.data;
+}
+
+// Free, no-auth proxies that fetch on their own infra and stream the response
+// back. Tried in order; first one to return a sensible-looking body wins.
+async function fetchHtmlViaProxy(url) {
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
+  ];
+  const errors = [];
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await axios.get(proxyUrl, {
+        headers: { "User-Agent": UA, "Accept": "text/html,*/*" },
+        timeout: 45000,
+        responseType: "text",
+        decompress: true,
+        maxRedirects: 5,
+        validateStatus: (s) => s >= 200 && s < 400,
+      });
+      const body = typeof res.data === "string" ? res.data : "";
+      // Sanity check: a real HTML page should have at least a tag we recognize.
+      if (body.length > 500 && /<\/?(html|body|table|div)/i.test(body)) {
+        return body;
+      }
+      errors.push(`${hostOf(proxyUrl)} → ${body.length}B (no HTML markers)`);
+    } catch (err) {
+      const s = err?.response?.status;
+      errors.push(`${hostOf(proxyUrl)} → ${s || err.message}`);
+    }
+  }
+  throw new Error(
+    `Direct request was blocked AND all fallback proxies failed: ${errors.join("; ")}. ` +
+    `Run the scrape from the local server, or wire up a paid scraping service for this host.`,
+  );
+}
+
+function hostOf(u) { try { return new URL(u).hostname; } catch { return u; } }
 
 // ---------------------------------------------------------------------
 // DOM extraction (cheerio)
