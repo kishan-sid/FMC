@@ -143,18 +143,32 @@ async function fetchHtmlViaScraperAPI(url) {
   if (!key) throw new Error("SCRAPERAPI_KEY not configured");
   const country = countryCodeForHost(new URL(url).hostname);
 
-  // Cheap attempt — works for sites that only block on IP, not on JS challenge.
-  let body = await callScraperAPI(key, url, country, {});
-  if (!isInterstitial(body)) return body;
+  // Three-tier escalation. ScraperAPI bills more for each tier; we only pay
+  // the next tier's price when the previous one didn't break through.
+  //   tier 1: bare fetch                    →  1 credit  (IP-block sites)
+  //   tier 2: render + premium proxy        → 25 credits (basic Cloudflare)
+  //   tier 3: render + ultra_premium proxy  → 75 credits (hardest Cloudflare)
+  const tiers = [
+    { name: "basic", params: {} },
+    { name: "premium+render", params: { render: "true", premium: "true" } },
+    { name: "ultra_premium+render", params: { render: "true", ultra_premium: "true" } },
+  ];
 
-  // Cloudflare / hCaptcha / similar — escalate to JS-rendered premium call.
-  body = await callScraperAPI(key, url, country, { render: "true", premium: "true" });
-  if (isInterstitial(body)) {
-    throw new Error(
-      "ScraperAPI couldn't bypass the site's anti-bot challenge even with render+premium",
-    );
+  let lastBody = "";
+  for (const tier of tiers) {
+    try {
+      const body = await callScraperAPI(key, url, country, tier.params);
+      if (!isInterstitial(body)) return body;
+      lastBody = body;
+    } catch (err) {
+      // Bubble up unless this is the last tier; otherwise try the next tier.
+      if (tier === tiers[tiers.length - 1]) throw err;
+    }
   }
-  return body;
+  throw new Error(
+    `ScraperAPI couldn't bypass the site's anti-bot challenge across all tiers ` +
+    `(last response was a ${lastBody.length}B challenge page).`,
+  );
 }
 
 async function callScraperAPI(key, url, country, extra) {
