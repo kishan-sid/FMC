@@ -133,38 +133,61 @@ async function fetchHtmlViaProxy(url) {
 }
 
 // ScraperAPI fallback — residential IP rotation + anti-bot bypass. Free tier:
-// 1000 credits/month. Set SCRAPERAPI_KEY in Vercel env vars to enable.
-// Geo-targets the site's country when known so the request comes from a
-// nearby residential IP (matters for sites that geo-fence or rate-limit
-// foreign-origin requests).
+// 5000 credits/month. Set SCRAPERAPI_KEY in Vercel env vars to enable.
+//
+// Strategy: try cheap (1 credit) first; if the response is a Cloudflare
+// interstitial, retry with render+premium (25 credits) so ScraperAPI
+// renders the JS challenge in a real browser and ships the resolved HTML.
 async function fetchHtmlViaScraperAPI(url) {
   const key = process.env.SCRAPERAPI_KEY;
   if (!key) throw new Error("SCRAPERAPI_KEY not configured");
-
-  const params = new URLSearchParams({
-    api_key: key,
-    url,
-    keep_headers: "true",
-  });
   const country = countryCodeForHost(new URL(url).hostname);
+
+  // Cheap attempt — works for sites that only block on IP, not on JS challenge.
+  let body = await callScraperAPI(key, url, country, {});
+  if (!isInterstitial(body)) return body;
+
+  // Cloudflare / hCaptcha / similar — escalate to JS-rendered premium call.
+  body = await callScraperAPI(key, url, country, { render: "true", premium: "true" });
+  if (isInterstitial(body)) {
+    throw new Error(
+      "ScraperAPI couldn't bypass the site's anti-bot challenge even with render+premium",
+    );
+  }
+  return body;
+}
+
+async function callScraperAPI(key, url, country, extra) {
+  const params = new URLSearchParams({ api_key: key, url, ...extra });
   if (country) params.set("country_code", country);
 
   const apiUrl = `https://api.scraperapi.com/?${params.toString()}`;
   const res = await axios.get(apiUrl, {
-    headers: browserHeaders(url),
-    timeout: 60000,
+    headers: { "User-Agent": UA, "Accept": "text/html,*/*" },
+    timeout: 90000,
     responseType: "text",
     decompress: true,
     validateStatus: () => true,
   });
   if (res.status >= 400) {
-    throw new Error(`ScraperAPI HTTP ${res.status}${res.data ? ` — ${String(res.data).slice(0, 200)}` : ""}`);
+    throw new Error(
+      `ScraperAPI HTTP ${res.status}${res.data ? ` — ${String(res.data).slice(0, 200)}` : ""}`,
+    );
   }
   const body = typeof res.data === "string" ? res.data : "";
   if (body.length < 500 || !/<\/?(html|body|table|div)/i.test(body)) {
     throw new Error(`ScraperAPI returned ${body.length}B (no HTML markers)`);
   }
   return body;
+}
+
+function isInterstitial(html) {
+  if (!html) return false;
+  return /Just a moment/i.test(html)
+    || /cf[-_]chl[-_]opt/i.test(html)
+    || /challenge-error-text/i.test(html)
+    || /cf-browser-verification/i.test(html)
+    || /<title>\s*Attention Required/i.test(html);
 }
 
 function countryCodeForHost(host) {
