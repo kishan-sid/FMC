@@ -141,7 +141,7 @@ function RunningBanner({ stepName, current, total, percent }) {
           </span>
         </div>
         <p className="mt-0.5 text-[11px] text-slate-400">
-          Pipeline chal rahyu che — page band na karjo, finish thaya pachhi download available thase.
+          Pipeline is running — please keep this page open. Downloads will be available once it finishes.
         </p>
       </div>
     </div>
