@@ -149,7 +149,7 @@ function RunningBanner({ stepName, current, total, percent }) {
 }
 
 export default function Exports() {
-  const [url, setUrl] = useState("https://www.kicker.de/bundesliga/spieltag/2025-26/33");
+  const [url, setUrl] = useState("");
   const [job, setJob] = useState(null);
   const [steps, setSteps] = useState(placeholderSteps());
   const [exportRows, setExportRows] = useState([]);
