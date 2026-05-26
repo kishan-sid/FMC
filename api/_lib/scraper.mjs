@@ -44,24 +44,39 @@ export async function scrapeUrl(url, { onProgress } = {}) {
   onProgress?.({ phase: "navigate", detail: url });
 
   let html;
-  try {
-    html = await fetchHtmlDirect(url);
-    // Some sites serve the Cloudflare challenge with HTTP 200 — body is the
-    // "Just a moment" wall, not the real content. Treat that exactly like a
-    // 403 and escalate to the proxy/ScraperAPI fallbacks.
-    if (isInterstitial(html)) {
-      onProgress?.({ phase: "navigate", detail: "Cloudflare challenge on direct fetch — falling back" });
+  // ZenRows takes precedence over all other strategies when configured. It's
+  // a paid (free-tier-capable) residential proxy + JS render service that
+  // bypasses Cloudflare reliably — much higher success rate than free
+  // proxies or ScraperAPI on tougher anti-bot targets like
+  // matchcenter.football.ch / matchcenter.afv.ch.
+  if (process.env.ZENROWS_API_KEY) {
+    try {
+      onProgress?.({ phase: "navigate", detail: "Fetching via ZenRows (residential + JS render)" });
+      html = await fetchHtmlViaZenRows(url);
+    } catch (err) {
+      onProgress?.({ phase: "navigate", detail: `ZenRows failed (${err.message}) — falling back` });
       html = await fetchHtmlViaFallbacks(url, onProgress);
     }
-  } catch (err) {
-    const status = err?.response?.status;
-    if (status === 403 || status === 429 || status === 451) {
-      onProgress?.({ phase: "navigate", detail: `Direct ${status} — falling back to proxy` });
-      html = await fetchHtmlViaFallbacks(url, onProgress);
-    } else if (status) {
-      throw new Error(`${url} returned HTTP ${status}`);
-    } else {
-      throw err;
+  } else {
+    try {
+      html = await fetchHtmlDirect(url);
+      // Some sites serve the Cloudflare challenge with HTTP 200 — body is the
+      // "Just a moment" wall, not the real content. Treat that exactly like a
+      // 403 and escalate to the proxy/ScraperAPI fallbacks.
+      if (isInterstitial(html)) {
+        onProgress?.({ phase: "navigate", detail: "Cloudflare challenge on direct fetch — falling back" });
+        html = await fetchHtmlViaFallbacks(url, onProgress);
+      }
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 403 || status === 429 || status === 451) {
+        onProgress?.({ phase: "navigate", detail: `Direct ${status} — falling back to proxy` });
+        html = await fetchHtmlViaFallbacks(url, onProgress);
+      } else if (status) {
+        throw new Error(`${url} returned HTTP ${status}`);
+      } else {
+        throw err;
+      }
     }
   }
 
@@ -226,6 +241,45 @@ async function callScraperAPI(key, url, country, extra) {
   const body = typeof res.data === "string" ? res.data : "";
   if (body.length < 500 || !/<\/?(html|body|table|div)/i.test(body)) {
     throw new Error(`ScraperAPI returned ${body.length}B (no HTML markers)`);
+  }
+  return body;
+}
+
+// ZenRows fetcher — residential proxy + JS rendering + premium anti-bot.
+// Free tier: 1000 credits. Each request to a Cloudflare-protected site uses
+// ~25 credits (premium_proxy + js_render). Country routing via the URL TLD
+// improves residential IP geography matching.
+async function fetchHtmlViaZenRows(url) {
+  const key = process.env.ZENROWS_API_KEY;
+  if (!key) throw new Error("ZENROWS_API_KEY not configured");
+
+  const country = countryCodeForHost(new URL(url).hostname);
+  const params = new URLSearchParams({
+    apikey: key,
+    url,
+    js_render: "true",
+    premium_proxy: "true",
+  });
+  if (country) params.set("proxy_country", country);
+
+  const apiUrl = `https://api.zenrows.com/v1/?${params.toString()}`;
+  const res = await axios.get(apiUrl, {
+    timeout: 90000,
+    responseType: "text",
+    decompress: true,
+    validateStatus: () => true,
+  });
+
+  if (res.status >= 400) {
+    const detail = String(res.data || "").slice(0, 200);
+    throw new Error(`ZenRows HTTP ${res.status} — ${detail}`);
+  }
+  const body = typeof res.data === "string" ? res.data : "";
+  if (body.length < 500 || !/<\/?(html|body|table|div)/i.test(body)) {
+    throw new Error(`ZenRows returned ${body.length}B (no HTML markers)`);
+  }
+  if (isInterstitial(body)) {
+    throw new Error("ZenRows response is still a Cloudflare challenge page");
   }
   return body;
 }

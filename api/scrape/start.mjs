@@ -1,16 +1,24 @@
 // Vercel serverless function — POST /api/scrape/start
 //
-// **Enqueue-only.** The function authenticates the user and creates a
-// `scrape_jobs` row (status="queued") + 6 `scrape_job_steps` placeholders.
-// The actual scrape is run by `server/src/worker.js`, which polls Supabase
-// for queued jobs and processes them on a residential-IP machine. This
-// architecture is required for sources protected by Cloudflare / datacenter-
-// IP blocks (matchcenter.football.ch, matchcenter.afv.ch, etc.) — the
-// Vercel function's datacenter IP cannot reach those sites.
+// Two-mode architecture (controlled by env vars):
 //
-// The UI subscribes to realtime updates on scrape_jobs / scrape_job_steps,
-// so it sees the worker's progress automatically — no UI changes needed.
+//   1. ZENROWS_API_KEY set  → Vercel function runs the full pipeline using
+//      ZenRows (residential proxy + JS render). PC-independent, works even
+//      when the local worker is offline. Costs ~25 credits per scrape on
+//      strong-Cloudflare sites; 1000 free credits/month on the free tier.
+//
+//   2. ZENROWS_API_KEY unset → Vercel function only enqueues the job;
+//      server/src/worker.js on a residential-IP machine processes it.
+//
+// The UI subscribes to Supabase realtime on scrape_jobs / scrape_job_steps,
+// so it sees progress identically regardless of which mode is active.
 import { createClient } from "@supabase/supabase-js";
+import { waitUntil } from "@vercel/functions";
+import { runPipeline } from "../_lib/pipeline.mjs";
+
+export const config = {
+  maxDuration: 60,
+};
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -47,9 +55,10 @@ export default async function handler(req, res) {
     const { error: seedErr } = await sb.rpc("seed_scrape_steps", { p_job_id: job.id });
     if (seedErr) throw seedErr;
 
+    const usingVercel = !!process.env.ZENROWS_API_KEY;
     await sb.from("activity_log").insert({
       user_id: user.id,
-      text: "Scrape queued — waiting for worker",
+      text: usingVercel ? "Scrape started (Vercel + ZenRows)" : "Scrape queued — waiting for worker",
       detail: source_url,
       tone: "info",
     });
@@ -60,9 +69,37 @@ export default async function handler(req, res) {
       .eq("job_id", job.id)
       .order("step_order");
 
+    // Vercel-side processing: claim the job atomically so the worker (if
+    // running) skips it. We mark it as running with worker_id="vercel" before
+    // releasing control to waitUntil so the worker's claimJob query (which
+    // looks for status="queued") will not race us.
+    if (usingVercel) {
+      const { data: claimed } = await sb
+        .from("scrape_jobs")
+        .update({
+          status: "running",
+          worker_id: "vercel",
+          claimed_at: new Date().toISOString(),
+          heartbeat_at: new Date().toISOString(),
+        })
+        .eq("id", job.id)
+        .eq("status", "queued")
+        .select()
+        .maybeSingle();
+      if (claimed) {
+        res.status(200).json({ job: claimed, steps });
+        waitUntil(runPipeline({ sb, job: claimed }).catch((e) => {
+          console.error("[scrape] pipeline crash", e);
+        }));
+        return;
+      }
+      // Couldn't claim — worker beat us. Fall through to the enqueue-only
+      // response so the worker drives the job.
+    }
+
     return res.status(200).json({ job, steps });
   } catch (e) {
-    console.error("[scrape] enqueue failed", e);
+    console.error("[scrape] start failed", e);
     return res.status(500).json({ error: e?.message || "scrape start failed" });
   }
 }

@@ -1,11 +1,11 @@
-// Shared scrape pipeline. Used by:
-//   - server/src/worker.js   → local worker that polls Supabase for queued jobs
+// Shared scrape pipeline — Vercel-side mirror of server/src/lib/pipeline.js.
 //
-// The pipeline drives 6 scrape_job_steps rows and writes status/progress back
-// to Supabase as it runs. The UI subscribes to realtime updates on those
-// tables, so progress is reflected live without any HTTP polling.
-import { scrapeUrl } from "../scraper/generic.js";
-import { buildStyledXlsx } from "../scraper/xlsx.js";
+// Uses the axios+cheerio scraper from api/_lib/scraper.mjs (which routes
+// through ZenRows when configured). Drives the same 6 scrape_job_steps as
+// the worker pipeline so the UI sees identical progress regardless of
+// whether scraping ran on Vercel or on a local worker.
+import { scrapeUrl } from "./scraper.mjs";
+import { buildStyledXlsx } from "./xlsx.mjs";
 
 export async function runPipeline({ sb, job }) {
   await sb.from("scrape_jobs")
@@ -179,8 +179,6 @@ async function upsertMatch(sb, job, s, mdId, matchId) {
 async function buildExport(sb, job, s) {
   const rows = s.csv_rows ?? [];
   const rowCount = Math.max(rows.length - 1, 0);
-  const headers = rows[0] ?? [];
-  const body = rows.slice(1);
 
   const csvBytes = new TextEncoder().encode(
     rows.map((r) => r.map(csvCell).join(",")).join("\n"),
@@ -188,10 +186,6 @@ async function buildExport(sb, job, s) {
   const xlsxBytes = await buildStyledXlsx(s);
 
   const stamp = new Date().toISOString().slice(0, 10);
-  // Sanitize the filename hint aggressively. Supabase Storage rejects keys
-  // containing characters like { } ? * etc, and some scraped section labels
-  // include CSS leak-through ("...{display:none}"). Keep only chars that are
-  // safe in both Supabase keys and Windows/macOS filenames.
   const rawHint = (s.csv_filename_hint || s.kind || "scrape");
   const hint = rawHint
     .replace(/[^a-zA-Z0-9 _.()\-]+/g, " ")
