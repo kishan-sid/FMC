@@ -44,12 +44,22 @@ export async function scrapeUrl(url, { onProgress } = {}) {
   onProgress?.({ phase: "navigate", detail: url });
 
   let html;
-  // ZenRows takes precedence over all other strategies when configured. It's
-  // a paid (free-tier-capable) residential proxy + JS render service that
-  // bypasses Cloudflare reliably — much higher success rate than free
-  // proxies or ScraperAPI on tougher anti-bot targets like
-  // matchcenter.football.ch / matchcenter.afv.ch.
-  if (process.env.ZENROWS_API_KEY) {
+  // scrape.do takes top priority when configured — residential proxy +
+  // optional JS render. Falls back to ZenRows / free proxies / ScraperAPI if
+  // it errors. Set SCRAPE_DO_API_KEY in Vercel env vars to enable.
+  if (process.env.SCRAPE_DO_API_KEY) {
+    try {
+      onProgress?.({ phase: "navigate", detail: "Fetching via scrape.do (residential + render)" });
+      html = await fetchHtmlViaScrapeDo(url);
+    } catch (err) {
+      onProgress?.({ phase: "navigate", detail: `scrape.do failed (${err.message}) — falling back` });
+      html = await fetchHtmlViaFallbacks(url, onProgress);
+    }
+  } else if (process.env.ZENROWS_API_KEY) {
+    // ZenRows takes precedence over ScraperAPI / free proxies when configured.
+    // Paid (free-tier-capable) residential proxy + JS render service that
+    // bypasses Cloudflare reliably on tougher anti-bot targets like
+    // matchcenter.football.ch / matchcenter.afv.ch.
     try {
       onProgress?.({ phase: "navigate", detail: "Fetching via ZenRows (residential + JS render)" });
       html = await fetchHtmlViaZenRows(url);
@@ -115,6 +125,48 @@ async function fetchHtmlViaFallbacks(url, onProgress) {
     errors.push("SCRAPERAPI_KEY env var not set — paid fallback skipped");
   }
   throw new Error(`All fetch strategies failed. ${errors.join(" | ")}`);
+}
+
+// scrape.do fetcher — residential proxy + optional JS rendering. For
+// Cloudflare-protected targets we always set render=true and super=true so
+// scrape.do uses its premium rotating residential pool plus a real headless
+// browser to clear the JS challenge. Country routing via geoCode improves
+// IP geography matching (e.g. CH IPs for matchcenter.football.ch).
+//
+// API format: https://api.scrape.do/?token=<KEY>&url=<ENCODED_URL>&render=true&super=true&geoCode=ch
+async function fetchHtmlViaScrapeDo(url) {
+  const key = process.env.SCRAPE_DO_API_KEY;
+  if (!key) throw new Error("SCRAPE_DO_API_KEY not configured");
+
+  const country = countryCodeForHost(new URL(url).hostname);
+  const params = new URLSearchParams({
+    token: key,
+    url,
+    render: "true",
+    super: "true",
+  });
+  if (country) params.set("geoCode", country.toUpperCase());
+
+  const apiUrl = `https://api.scrape.do/?${params.toString()}`;
+  const res = await axios.get(apiUrl, {
+    timeout: 90000,
+    responseType: "text",
+    decompress: true,
+    validateStatus: () => true,
+  });
+
+  if (res.status >= 400) {
+    const detail = String(res.data || "").slice(0, 200);
+    throw new Error(`scrape.do HTTP ${res.status} — ${detail}`);
+  }
+  const body = typeof res.data === "string" ? res.data : "";
+  if (body.length < 500 || !/<\/?(html|body|table|div)/i.test(body)) {
+    throw new Error(`scrape.do returned ${body.length}B (no HTML markers)`);
+  }
+  if (isInterstitial(body)) {
+    throw new Error("scrape.do response is still a Cloudflare challenge page");
+  }
+  return body;
 }
 
 async function fetchHtmlDirect(url) {

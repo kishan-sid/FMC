@@ -57,9 +57,14 @@ these are set (you should already have them from the previous deployment):
 | `SUPABASE_SERVICE_ROLE_KEY` | (from `server/.env`) | Production, Preview, Development |
 | `VITE_SUPABASE_URL` | same as `SUPABASE_URL` | Production, Preview, Development |
 | `VITE_SUPABASE_ANON_KEY` | same as `SUPABASE_ANON_KEY` | Production, Preview, Development |
+| `SCRAPE_DO_API_KEY` | (from `server/.env`) | Production, Preview, Development |
 
-`SCRAPERAPI_KEY` is **no longer needed** — the worker uses Playwright on a
-residential IP, no paid proxy required.
+When `SCRAPE_DO_API_KEY` is set, `api/scrape/start.mjs` runs the full
+pipeline on Vercel using scrape.do's residential proxy + JS render — so
+scrapes work even when the local worker is offline. Get a token at
+https://dashboard.scrape.do. `ZENROWS_API_KEY` is an alternative provider
+with the same behavior (scrape.do takes priority when both are set).
+`SCRAPERAPI_KEY` is an optional second-tier fallback.
 
 ### 4. Set up the worker machine
 

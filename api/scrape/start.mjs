@@ -2,12 +2,12 @@
 //
 // Two-mode architecture (controlled by env vars):
 //
-//   1. ZENROWS_API_KEY set  → Vercel function runs the full pipeline using
-//      ZenRows (residential proxy + JS render). PC-independent, works even
-//      when the local worker is offline. Costs ~25 credits per scrape on
-//      strong-Cloudflare sites; 1000 free credits/month on the free tier.
+//   1. SCRAPE_DO_API_KEY or ZENROWS_API_KEY set → Vercel function runs the
+//      full pipeline using the configured residential-proxy service. PC-
+//      independent, works even when the local worker is offline. scrape.do
+//      takes priority when both keys are present.
 //
-//   2. ZENROWS_API_KEY unset → Vercel function only enqueues the job;
+//   2. Neither key set → Vercel function only enqueues the job;
 //      server/src/worker.js on a residential-IP machine processes it.
 //
 // The UI subscribes to Supabase realtime on scrape_jobs / scrape_job_steps,
@@ -55,10 +55,11 @@ export default async function handler(req, res) {
     const { error: seedErr } = await sb.rpc("seed_scrape_steps", { p_job_id: job.id });
     if (seedErr) throw seedErr;
 
-    const usingVercel = !!process.env.ZENROWS_API_KEY;
+    const usingVercel = !!(process.env.SCRAPE_DO_API_KEY || process.env.ZENROWS_API_KEY);
+    const proxyName = process.env.SCRAPE_DO_API_KEY ? "scrape.do" : "ZenRows";
     await sb.from("activity_log").insert({
       user_id: user.id,
-      text: usingVercel ? "Scrape started (Vercel + ZenRows)" : "Scrape queued — waiting for worker",
+      text: usingVercel ? `Scrape started (Vercel + ${proxyName})` : "Scrape queued — waiting for worker",
       detail: source_url,
       tone: "info",
     });
