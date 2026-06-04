@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, LogOut, ChevronDown } from "lucide-react";
+import { Bell, LogOut, User, ChevronDown } from "lucide-react";
 
 export default function Topbar({ title, subtitle, user, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -54,6 +54,9 @@ export default function Topbar({ title, subtitle, user, onLogout }) {
                   <div className="text-sm font-semibold text-slate-100">{user?.name}</div>
                   <div className="text-[11px] text-slate-400">{user?.email}</div>
                 </div>
+                <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">
+                  <User size={14} /> Profile
+                </button>
                 <button
                   onClick={onLogout}
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10"

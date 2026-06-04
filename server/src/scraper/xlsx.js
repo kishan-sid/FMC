@@ -42,7 +42,41 @@ export async function buildStyledXlsx(scraped) {
   wb.creator = "Football Scrapper";
   wb.created = new Date();
 
-  const sheetName = niceSheetName(scraped);
+  // Multi-sheet workbook (e.g. a match → Match / Players / Events) when the
+  // scraper supplies `sheets`; otherwise a single sheet from `csv_rows`.
+  const sheets = (scraped.sheets && scraped.sheets.length)
+    ? scraped.sheets
+    : [{ name: niceSheetName(scraped), rows: scraped.csv_rows ?? [] }];
+
+  const usedNames = new Set();
+  sheets.forEach((sh, idx) => {
+    const baseTitle = humanTitle(scraped);
+    const title = sheets.length > 1 ? `${baseTitle} · ${sh.name}` : baseTitle;
+    let name = cleanSheetName(sh.name || `Sheet ${idx + 1}`);
+    while (usedNames.has(name.toLowerCase())) name = cleanSheetName(`${name} ${idx + 1}`);
+    usedNames.add(name.toLowerCase());
+
+    if (sh.layout === "teams") {
+      renderTeamSheet(wb, { sheetName: name, title, subtitle: scraped.summary || "", sheet: sh, sourceUrl: scraped.source_url });
+      return;
+    }
+    renderSheet(wb, {
+      sheetName: name,
+      title,
+      subtitle: scraped.summary || "",
+      rows: sh.rows ?? [],
+      // Standings colouring only applies to the single-sheet standings export.
+      isStandings: scraped.kind === "standings" && sheets.length === 1,
+      sourceUrl: scraped.source_url,
+    });
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  return new Uint8Array(buf);
+}
+
+// Render one styled worksheet (title banner, subtitle, header, body, footer).
+function renderSheet(wb, { sheetName, title, subtitle, rows, isStandings, sourceUrl }) {
   const ws = wb.addWorksheet(sheetName, {
     views: [{ state: "frozen", ySplit: 4 }], // freeze first 4 rows
     pageSetup: {
@@ -55,14 +89,14 @@ export async function buildStyledXlsx(scraped) {
     },
   });
 
-  const headers = (scraped.csv_rows?.[0] ?? []).map((h) => prettyHeader(h));
-  const body = scraped.csv_rows?.slice(1) ?? [];
+  const headers = (rows?.[0] ?? []).map((h) => prettyHeader(h));
+  const body = rows?.slice(1) ?? [];
   const colCount = Math.max(headers.length, 1);
 
   // ---------- Row 1: Title banner ----------
   ws.mergeCells(1, 1, 1, colCount);
   const titleCell = ws.getCell(1, 1);
-  titleCell.value = humanTitle(scraped);
+  titleCell.value = title;
   titleCell.font = { name: "Calibri", size: 16, bold: true, color: { argb: COLOR_TITLE_TEXT } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
   titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_PRIMARY_DARK } };
@@ -71,7 +105,7 @@ export async function buildStyledXlsx(scraped) {
   // ---------- Row 2: Subtitle ----------
   ws.mergeCells(2, 1, 2, colCount);
   const subtitleCell = ws.getCell(2, 1);
-  subtitleCell.value = scraped.summary || "";
+  subtitleCell.value = subtitle || "";
   subtitleCell.font = { name: "Calibri", size: 11, italic: true, color: { argb: COLOR_SUBTITLE } };
   subtitleCell.alignment = { horizontal: "center", vertical: "middle" };
   ws.getRow(2).height = 20;
@@ -97,10 +131,14 @@ export async function buildStyledXlsx(scraped) {
   const numericCols = detectNumericColumns(headers, body);
 
   // Standings-specific column indices (used for special styling)
-  const isStandings = scraped.kind === "standings";
   const positionColIdx = isStandings ? headers.findIndex((h) => /position/i.test(h)) : -1;
   const goalDiffColIdx = isStandings ? headers.findIndex((h) => /goal\s*diff/i.test(h)) : -1;
   const pointsColIdx = isStandings ? headers.findIndex((h) => /^points$/i.test(h)) : -1;
+
+  // Player-sheet goal columns get green / red colouring.
+  const goalsColIdx = headers.findIndex((h) => /^goals$/i.test(h));
+  const gfColIdx = headers.findIndex((h) => /on.?pitch gf|goals for/i.test(h));
+  const gaColIdx = headers.findIndex((h) => /on.?pitch ga|goals against/i.test(h));
 
   // Group standings reset the rank within each group, so track per-group position
   let prevGroup = null;
@@ -168,6 +206,14 @@ export async function buildStyledXlsx(scraped) {
           }
         }
       }
+
+      // Player sheet: colour goal columns (green for scored / for, red for against)
+      if ((c === goalsColIdx || c === gfColIdx) && numericVal > 0) {
+        cell.font = { ...cell.font, color: { argb: COLOR_GOAL_POS }, bold: true };
+      }
+      if (c === gaColIdx && numericVal > 0) {
+        cell.font = { ...cell.font, color: { argb: COLOR_GOAL_NEG }, bold: true };
+      }
     });
     row.height = 18;
   });
@@ -188,13 +234,110 @@ export async function buildStyledXlsx(scraped) {
   ws.mergeCells(footerRowIdx, 1, footerRowIdx, colCount);
   const footerCell = ws.getCell(footerRowIdx, 1);
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ") + " UTC";
-  footerCell.value = `Generated ${ts} · Football Scrapper · Source: ${scraped.source_url || "n/a"}`;
+  footerCell.value = `Generated ${ts} · Football Scrapper · Source: ${sourceUrl || "n/a"}`;
   footerCell.font = { name: "Calibri", size: 9, italic: true, color: { argb: COLOR_FOOTER } };
   footerCell.alignment = { horizontal: "left", vertical: "middle" };
   ws.getRow(footerRowIdx).height = 16;
+}
 
-  const buf = await wb.xlsx.writeBuffer();
-  return new Uint8Array(buf);
+// Team-grouped player sheet: a banner per team, then Starting XI and
+// Substitutes blocks, with a blank gap before the next team.
+function renderTeamSheet(wb, { sheetName, title, subtitle, sheet, sourceUrl }) {
+  const ws = wb.addWorksheet(sheetName, {
+    pageSetup: { paperSize: 9, orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+      margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 } },
+  });
+  const cols = (sheet.columns || []).map((h) => prettyHeader(h));
+  const colCount = Math.max(cols.length, 1);
+  // Numeric columns (everything from "On (min)" onward) + goal columns.
+  const numFrom = cols.findIndex((h) => /on \(min\)|^min|minutes/i.test(h));
+  const goalsIdx = cols.findIndex((h) => /^goals$/i.test(h));
+  const gfIdx = cols.findIndex((h) => /goals for/i.test(h));
+  const gaIdx = cols.findIndex((h) => /goals against/i.test(h));
+  const isNum = (c) => numFrom >= 0 && c >= numFrom;
+
+  let r = 1;
+  ws.mergeCells(r, 1, r, colCount);
+  const tc = ws.getCell(r, 1);
+  tc.value = title;
+  tc.font = { name: "Calibri", size: 16, bold: true, color: { argb: COLOR_TITLE_TEXT } };
+  tc.alignment = { horizontal: "center", vertical: "middle" };
+  tc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_PRIMARY_DARK } };
+  ws.getRow(r).height = 28; r++;
+
+  ws.mergeCells(r, 1, r, colCount);
+  const sc = ws.getCell(r, 1);
+  sc.value = subtitle || "";
+  sc.font = { name: "Calibri", size: 11, italic: true, color: { argb: COLOR_SUBTITLE } };
+  sc.alignment = { horizontal: "center", vertical: "middle" };
+  ws.getRow(r).height = 18; r += 2; // blank line after subtitle
+
+  for (const team of sheet.teams || []) {
+    // Team banner
+    ws.mergeCells(r, 1, r, colCount);
+    const band = ws.getCell(r, 1);
+    band.value = team.score != null ? `${team.name}  —  ${team.score} goals` : team.name;
+    band.font = { name: "Calibri", size: 13, bold: true, color: { argb: COLOR_TITLE_TEXT } };
+    band.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+    band.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_PRIMARY } };
+    ws.getRow(r).height = 22; r++;
+
+    // Column header
+    const hr = ws.getRow(r);
+    cols.forEach((h, i) => {
+      const c = hr.getCell(i + 1);
+      c.value = h;
+      c.font = { name: "Calibri", size: 10, bold: true, color: { argb: COLOR_HEADER_TEXT } };
+      c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_PRIMARY_DARK } };
+      c.border = thinBorders();
+    });
+    hr.height = 22; r++;
+
+    for (const group of team.groups || []) {
+      // Subsection label (Starting XI / Substitutes)
+      ws.mergeCells(r, 1, r, colCount);
+      const gl = ws.getCell(r, 1);
+      gl.value = `${group.label} (${group.rows.length})`;
+      gl.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF374151" } };
+      gl.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+      gl.alignment = { horizontal: "left", vertical: "middle", indent: 1 };
+      ws.getRow(r).height = 18; r++;
+
+      group.rows.forEach((rowData, ri) => {
+        const row = ws.getRow(r);
+        rowData.forEach((val, c) => {
+          const cell = row.getCell(c + 1);
+          const num = isNum(c) ? toNumber(val) : null;
+          if (num !== null) { cell.value = num; cell.numFmt = "0"; }
+          else cell.value = val ?? "";
+          cell.font = { name: "Calibri", size: 10 };
+          cell.alignment = { horizontal: isNum(c) ? "right" : "left", vertical: "middle" };
+          cell.border = thinBorders();
+          if (ri % 2 === 1) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_ZEBRA } };
+          if ((c === goalsIdx || c === gfIdx) && num > 0) cell.font = { ...cell.font, color: { argb: COLOR_GOAL_POS }, bold: true };
+          if (c === gaIdx && num > 0) cell.font = { ...cell.font, color: { argb: COLOR_GOAL_NEG }, bold: true };
+        });
+        row.height = 17; r++;
+      });
+    }
+    r++; // gap before next team
+  }
+
+  // Column widths
+  for (let c = 1; c <= colCount; c++) {
+    let max = String(cols[c - 1] ?? "").length;
+    (sheet.teams || []).forEach((t) => (t.groups || []).forEach((g) => g.rows.forEach((row) => {
+      const v = row[c - 1]; const len = v == null ? 0 : String(v).length; if (len > max) max = len;
+    })));
+    ws.getColumn(c).width = Math.min(Math.max(max + 2, 8), 42);
+  }
+
+  ws.mergeCells(r + 1, 1, r + 1, colCount);
+  const fc = ws.getCell(r + 1, 1);
+  const ts = new Date().toISOString().slice(0, 19).replace("T", " ") + " UTC";
+  fc.value = `Generated ${ts} · Football Scrapper · Source: ${sourceUrl || "n/a"}`;
+  fc.font = { name: "Calibri", size: 9, italic: true, color: { argb: COLOR_FOOTER } };
 }
 
 // ---------------------------------------------------------------------
@@ -268,6 +411,11 @@ function niceSheetName(scraped) {
   // Excel sheet names: 31 chars max, no [ ] / \ ? * : ' "
   const base = humanTitle(scraped) || scraped.kind || "Export";
   return base.replace(/[\[\]/\\?*:'"]+/g, "").slice(0, 31) || "Export";
+}
+
+function cleanSheetName(name) {
+  // Excel sheet names: 31 chars max, no [ ] / \ ? * : ' "
+  return String(name || "Sheet").replace(/[\[\]/\\?*:'"]+/g, "").trim().slice(0, 31) || "Sheet";
 }
 
 // ---------------------------------------------------------------------
