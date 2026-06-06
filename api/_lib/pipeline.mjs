@@ -54,6 +54,10 @@ export async function runPipeline({ sb, job }) {
 
   await runStep(ctx, 4, async (c) => {
     const s = c.scraped;
+    if (s.kind === "match" && s.data.players?.length) {
+      const onPitch = s.data.players.filter((p) => p.played).length;
+      return `${s.data.players.length} players · ${onPitch} on-pitch timelines reconstructed`;
+    }
     if (s.kind === "match" && s.data.lineup_rows?.length) {
       return `${s.data.lineup_rows.length} lineup rows captured (raw)`;
     }
@@ -62,6 +66,10 @@ export async function runPipeline({ sb, job }) {
 
   await runStep(ctx, 5, async (c) => {
     const s = c.scraped;
+    if (s.kind === "match" && s.data.players?.length) {
+      const goals = (s.data.events || []).filter((e) => e.type === "goal").length;
+      return `On-pitch goal matrix computed · ${goals} goals across ${s.data.players.length} players`;
+    }
     if (s.kind === "match" && s.data.played) {
       return `Score recorded: ${s.data.home_score}-${s.data.away_score}`;
     }

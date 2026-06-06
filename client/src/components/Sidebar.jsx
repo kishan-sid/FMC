@@ -1,8 +1,7 @@
-import { LayoutDashboard, Radio, CalendarDays, Trophy, Users, Download, CircleDot } from "lucide-react";
+import { LayoutDashboard, CalendarDays, Trophy, Users, Download, CircleDot } from "lucide-react";
 
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "live", label: "Live Scores", icon: Radio },
   { id: "exports", label: "Scrape & Export", icon: Download },
   { id: "matchdays", label: "Matchdays", icon: CalendarDays },
   { id: "match", label: "Match Detail", icon: Trophy },

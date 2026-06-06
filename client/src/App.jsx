@@ -6,13 +6,11 @@ import Matchdays from "./views/Matchdays.jsx";
 import MatchDetail from "./views/MatchDetail.jsx";
 import Players from "./views/Players.jsx";
 import Exports from "./views/Exports.jsx";
-import Live from "./views/Live.jsx";
 import Login from "./views/Login.jsx";
 import { supabase } from "./lib/supabase.js";
 
 const META = {
   dashboard: { title: "Dashboard", subtitle: "Pipeline overview · last 6 matchdays" },
-  live: { title: "Live Scores", subtitle: "Live football worldwide · scores, lineups & events" },
   matchdays: { title: "Matchdays", subtitle: "All scraped fixtures grouped by Spieltag" },
   match: { title: "Match Detail", subtitle: "Bayern München 3 : 2 Borussia Dortmund · Spieltag 33" },
   players: { title: "Players", subtitle: "On-pitch goal analysis across all scraped matches" },
@@ -81,7 +79,6 @@ export default function App() {
         <Topbar title={meta.title} subtitle={meta.subtitle} user={user} onLogout={handleLogout} />
         <main className="flex-1 overflow-y-auto">
           {view === "dashboard" && <Dashboard onOpenMatchdays={() => setView("matchdays")} />}
-          {view === "live" && <Live />}
           {view === "matchdays" && (
             <Matchdays onOpenMatch={(id) => { setSelectedMatch(id); setView("match"); }} />
           )}
